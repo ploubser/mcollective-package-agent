@@ -1,10 +1,12 @@
 metadata    :name        => "package",
             :description => "Install and uninstall software packages",
             :author      => "R.I.Pienaar",
-            :license     => "ASL2",
-            :version     => "3.5",
+            :license     => "ASL 2.0",
+            :version     => "4.0.0",
             :url         => "https://github.com/puppetlabs/mcollective-plugins",
             :timeout     => 180
+
+requires :mcollective => "2.2.1"
 
 ["install", "update", "uninstall", "purge"].each do |act|
     action act, :description => "#{act.capitalize} a package" do
@@ -12,7 +14,7 @@ metadata    :name        => "package",
               :prompt      => "Package Name",
               :description => "Package to #{act}",
               :type        => :string,
-              :validation  => '.',
+              :validation  => :shellsafe,
               :optional    => false,
               :maxlength   => 90
 
@@ -47,6 +49,10 @@ metadata    :name        => "package",
         output :release,
                :description => "Package release number",
                :display_as => "Release"
+
+        summarize do
+          aggregate summary(:ensure)
+        end
     end
 end
 
@@ -57,7 +63,7 @@ action "status", :description => "Get the status of a package" do
           :prompt      => "Package Name",
           :description => "Package to retrieve the status of",
           :type        => :string,
-          :validation  => '.',
+          :validation  => :shellsafe,
           :optional    => false,
           :maxlength   => 90
 
@@ -93,11 +99,9 @@ action "status", :description => "Get the status of a package" do
            :description => "Package release number",
            :display_as => "Release"
 
-    if respond_to?(:summarize)
-        summarize do
-            aggregate summary(:ensure)
-            aggregate summary(:arch)
-        end
+    summarize do
+      aggregate summary(:ensure)
+      aggregate summary(:arch)
     end
 end
 

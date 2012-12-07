@@ -1,152 +1,179 @@
-$puppet_application_name = :agent
-require 'puppet'
-
 module MCollective
   module Agent
     class Package<RPC::Agent
-      metadata :name        => "Package Agent",
-               :description => "Install and uninstall software packages",
-               :author      => "R.I.Pienaar",
-               :license     => "ASL2",
-               :version     => "3.3",
-               :url         => "http://projects.puppetlabs.com/projects/mcollective-plugins/wiki",
-               :timeout     => 180
 
-      ["install", "update", "uninstall", "purge", "status"].each do |act|
-        action act do
-          validate :package, :shellsafe
-
-          properties, output = do_pkg_action(request[:package], act.to_sym)
-
-          reply[:output] = output
-
-          if properties.is_a?(Hash)
-            properties.keys.each do |key|
-              reply[key] = properties[key].to_s
-            end
-          end
-        end
-      end
-
-      action "yum_clean" do
-        reply.fail! "Cannot find yum at /usr/bin/yum" unless File.exist?("/usr/bin/yum")
-
-        if request[:mode]
-          clean_mode = request[:mode]
-        else
-          clean_mode = @config.pluginconf["package.yum_clean_mode"] || "all"
-        end
-
-        if ["all", "headers", "packages", "metadata", "dbcache", "plugins", "expire-cache"].include?(clean_mode)
-            reply[:exitcode] = run("/usr/bin/yum clean #{clean_mode}", :stdout => :output, :chomp => true)
-        else
-          reply.fail! "Unsupported yum clean mode: #{clean_mode}"
-        end
-
-        reply.fail! "Yum clean failed, exit code was #{reply[:exitcode]}" unless reply[:exitcode] == 0
-      end
-
-      action "apt_update" do
-        reply.fail! "Cannot find apt-get at /usr/bin/apt-get" unless File.exist?("/usr/bin/apt-get")
-        reply[:exitcode] = run("/usr/bin/apt-get update", :stdout => :output, :chomp => true)
-
-        reply.fail! "apt-get update failed, exit code was #{reply[:exitcode]}" unless reply[:exitcode] == 0
-      end
-
-      action "checkupdates" do
-        if File.exist?("/usr/bin/yum")
-          reply[:package_manager] = "yum"
-          yum_checkupdates_action
-        elsif File.exist?("/usr/bin/apt-get")
-          reply[:package_manager] = "apt"
-          apt_checkupdates_action
-        else
-          reply.fail! "Cannot find a compatible package system to check updates for"
-        end
-      end
-
-      action "yum_checkupdates" do
-        reply.fail! "Cannot find yum at /usr/bin/yum" unless File.exist?("/usr/bin/yum")
-        reply[:exitcode] = run("/usr/bin/yum -q check-update", :stdout => :output, :chomp => true)
-
-        reply[:outdated_packages] = do_yum_outdated_packages(reply[:output])
-      end
-
-      action "apt_checkupdates" do
-        reply.fail! "Cannot find apt at /usr/bin/apt-get" unless File.exist?("/usr/bin/apt-get")
-        reply[:exitcode] = run("/usr/bin/apt-get --simulate dist-upgrade", :stdout => :output, :chomp => true)
-        reply[:outdated_packages] = []
-
-        if reply[:exitcode] == 0
-          reply[:output].each_line do |line|
-            next unless line =~ /^Inst/
-
-            # Inst emacs23 [23.1+1-4ubuntu7] (23.1+1-4ubuntu7.1 Ubuntu:10.04/lucid-updates) []
-            if line =~ /Inst (.+?) \[.+?\] \((.+?)\s(.+?)\)/
-              reply[:outdated_packages] << {:package => $1.strip,
-                                            :version => $2.strip,
-                                            :repo => $3.strip}
-            end
-          end
-        else
-          reply.fail! "APT check-update failed, exit code was #{reply[:exitcode]}"
-        end
-      end
-
-      private
-      def do_pkg_action(package, action)
+      action 'install' do
         begin
-          pkg = ::Puppet::Type.type(:package).new(:name => package).provider
+          Package.do_pkg_action(request[:package], :install, reply)
+        rescue => e
+          reply.fail! "Could not install package: %s" % e.to_s
+        end
+      end
 
-          output = ""
-          properties = ""
+      action 'update' do
+        begin
+          Package.do_pkg_action(request[:package], :update, reply)
+        rescue => e
+          reply.fail! "Could not update package: %s" % e.to_s
+        end
+      end
 
-          case action
-            when :install
-              output = pkg.install if [:absent, :purged].include?(pkg.properties[:ensure])
+      action 'uninstall' do
+        begin
+          Package.do_pkg_action(request[:package], :uninstall, reply)
+        rescue => e
+          reply.fail! "Could not uninstall package: %s" % e.to_s
+        end
+      end
 
-            when :update
-              output = pkg.update unless [:absent, :purged].include?(pkg.properties[:ensure])
+      action 'purge' do
+        begin
+          Package.do_pkg_action(request[:package], :purge, reply)
+        rescue => e
+          reply.fail! "Could not purge package: %s" % e.to_s
+        end
+      end
 
-            when :uninstall
-              output = pkg.uninstall unless [:absent, :purged].include?(pkg.properties[:ensure])
+      action 'status' do
+        begin
+          Package.do_pkg_action(request[:package], :status, reply)
+        rescue => e
+          reply.fail! "Could not determine package status: %s" % e.to_s
+        end
+      end
 
-            when :status
-              # noop
+      action 'yum_clean' do
+        clean_mode = request[:mode] || @config.pluginconf.fetch('package.yum_clean_mode', 'all')
 
-            when :purge
-              output = pkg.purge
-
-            else
-              reply.fail "Unknown action #{action}"
-          end
-
-          pkg.flush
-          [pkg.properties, output]
-        rescue Exception => e
+        begin
+          result = package_helper.yum_clean(clean_mode)
+          reply[:exitcode] = result[:exitcode]
+          reply[:output] = result[:output]
+        rescue => e
           reply.fail! e.to_s
         end
       end
 
-      def do_yum_outdated_packages(packages)
-        outdated_pkgs = []
-        packages.strip.each_line do |line|
-          # Don't handle obsoleted packages for now
-          break if line =~ /^Obsoleting\sPackages/i
+      action 'apt_update' do
+        begin
+          result = package_helper.apt_update
+          reply[:exitcode] = result[:exitcode]
+          reply[:output] = result[:output]
+        rescue => e
+          reply.fail! e.to_s
+        end
+      end
 
-          pkg, ver, repo = line.split
-          if pkg && ver && repo
-            pkginfo = { :package => pkg.strip,
-              :version => ver.strip,
-              :repo => repo.strip
-            }
-            outdated_pkgs << pkginfo
+      action 'checkupdates' do
+        begin
+          do_checkupdates_action('checkupdates')
+        rescue => e
+          reply.fail! e.to_s
+        end
+      end
+
+      action 'yum_checkupdates' do
+        begin
+          do_checkupdates_action('yum_checkupdates')
+        rescue => e
+          reply.fail! e.to_s
+        end
+      end
+
+      action 'apt_checkupdates' do
+        begin
+          do_checkupdates_action('apt_checkupdates')
+        rescue => e
+          reply.fail! e.to_s
+        end
+      end
+
+      # Identifies the configured package provider
+      # Defaults to puppet
+      def self.package_provider
+        @config ||= Config.instance
+        return @config.pluginconf.fetch('package.provider', 'puppet')
+      end
+
+      # Loads both the base class that all providers should inherit from,
+      # as well as the actual provider class that implements the install,
+      # uninstall, purge, update and status methods.
+      def self.load_provider_class(provider)
+        provider = "%sPackage" % provider.capitalize
+        Log.debug("Loading %s package provider" % provider)
+
+        begin
+          PluginManager.loadclass('MCollective::Util::Package::Base')
+          PluginManager.loadclass("MCollective::Util::Package::#{provider}")
+          Util::Package.const_get(provider)
+        rescue => e
+          Log.debug("Cannot load package provider class '%s': %s" % [provider, e.to_s])
+          raise "Cannot load package provider class '%s': %s" % [provider, e.to_s]
+        end
+      end
+
+      # Parses the plugin configuration for all configuration options
+      # specific to package provider.
+      # Configuration options are defined as:
+      #
+      #   plugin.package.my_provider.x = y
+      #
+      # which will then be resturned as
+      #
+      #   {:x => 'y'}
+      #
+      def self.provider_options(provider)
+        @config ||= Config.instance
+        provider_options = {}
+
+        @config.pluginconf.each do |k, v|
+          if k =~ /package\.#{provider}/
+            provider_options[k.split('.').last.to_sym] = v
           end
         end
-        outdated_pkgs
+
+        provider_options
+      end
+
+      # Loads the requires package provider and calls the method that
+      # corresponds to the supplied action. The third arugment is an
+      # in-out variable used to update the reply values in the case of
+      # agents, and the value hash in the case of data plugins.
+      def self.do_pkg_action(package, action, reply)
+        provider = Package.load_provider_class(Package.package_provider).new(package, Package.provider_options(Package.package_provider))
+        result = provider.send(action)
+
+        if action == :status
+          result.each do |k,v|
+            reply[k] = v
+          end
+        else
+          result[:status].each do |k,v|
+            reply[k] = v
+          end
+        end
+
+        raise result[:msg] if result[:msg]
+
+        reply[:output] = result[:output] if result[:output]
+      end
+
+      private
+      # Calls the correct helper method corresponding to the supplied
+      # action and updates the agents reply values.
+      def do_checkupdates_action(action)
+        result = package_helper.send(action)
+        reply[:exitcode] = result[:exitcode]
+        reply[:output] = result[:output]
+        reply[:outdated_packages] = result[:outdated_packages]
+        reply[:package_manager] = result[:package_manager]
+      end
+
+      #Loads and returns the package_helper class
+      def package_helper
+        PluginManager.loadclass('MCollective::Util::Package::PackageHelpers')
+        Util::Package.const_get('PackageHelpers')
       end
     end
   end
 end
-
-# vi:tabstop=2:expandtab:ai:filetype=ruby

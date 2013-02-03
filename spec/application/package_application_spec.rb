@@ -40,8 +40,8 @@ module MCollective
         end
 
         it 'should set the package and action' do
-          ARGV << 'rspec'
           ARGV << 'install'
+          ARGV << 'rspec'
 
           configuration = {}
           @app.post_option_parser(configuration)

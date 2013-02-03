@@ -4,7 +4,7 @@ module MCollective
       description "Install, uninstall, update, purge and perform other actions to packages"
 
       usage <<-END_OF_USAGE
-mco package [OPTIONS] [FILTERS] <PACKAGE> <ACTION>
+mco package [OPTIONS] [FILTERS] <ACTION> <PACKAGE>
 Usage: mco package <PACKAGE> <install|uninstall|purge|update|status>
 
 The ACTION can be one of the following:
@@ -32,8 +32,8 @@ END_OF_USAGE
         if ARGV.size < 2
           handle_message(:raise, 1)
         else
-          package = ARGV.shift
           action = ARGV.shift
+          package = ARGV.shift
 
           action_list = ['install', 'uninstall', 'purge', 'update', 'status']
 
